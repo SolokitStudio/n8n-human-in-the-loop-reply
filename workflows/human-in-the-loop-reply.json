@@ -1,0 +1,648 @@
+{
+  "name": "Human-in-the-loop lead reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-reply",
+        "responseMode": "onReceived",
+        "options": {
+          "responseData": "Thanks, we got your message."
+        }
+      },
+      "id": "3e10b31c-396c-5382-a8bf-6fcb596f32c7",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "f8c64337-e749-5526-a1cf-88be9fe64040"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "include": "all",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5042c0a3-c636-5c83-ba69-ac103abe13d1",
+              "name": "slackWebhookUrl",
+              "value": "https://hooks.slack.com/services/REPLACE/ME/PLEASE",
+              "type": "string"
+            },
+            {
+              "id": "1c782219-2029-508f-8aba-e40b601acf54",
+              "name": "signature",
+              "value": "Best,\nYour Name\nYour Company",
+              "type": "string"
+            },
+            {
+              "id": "94822545-3087-57c0-bfcb-6a89030d633c",
+              "name": "subjectPrefix",
+              "value": "your enquiry",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f8db00a0-e430-5487-9b87-792bce973fa5",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizes the incoming lead and builds a template-based draft reply.\n// No credentials or external calls needed. Edit the TEMPLATES below to match your voice.\nconst cfg = $('Config').first().json;\n\nconst TEMPLATES = {\n  pricing: (l) => `Thanks for asking about pricing${l.company ? ' for ' + l.company : ''}. ` +\n    `Pricing depends on scope, so the fastest way to a real number is a short call. ` +\n    `Could you share roughly what you need and your timeline? I'll come back with options.`,\n  demo: (l) => `Happy to walk you through it. ` +\n    `What are two or three times that work for you this week or next? ` +\n    `If you share what you're hoping to see, I'll tailor the walkthrough.`,\n  support: (l) => `Sorry you're running into this. ` +\n    `Could you send the steps you took, what you expected, and what happened instead (a screenshot helps)? ` +\n    `I'll look into it as soon as I have that.`,\n  partnership: (l) => `Thanks for reaching out about working together${l.company ? ' with ' + l.company : ''}. ` +\n    `Could you share a bit more about what you have in mind and who's involved on your side? ` +\n    `Then we can see if a call makes sense.`,\n  general: (l) => `Thanks for getting in touch. ` +\n    `I've read your note and want to make sure I answer the right question. ` +\n    `Could you tell me a little more about what you're looking for?`,\n};\n\nconst RULES = [\n  ['pricing', /\\b(price|pricing|cost|quote|budget|rates?|how much)\\b/i],\n  ['demo', /\\b(demo|walk ?through|call|meeting|schedule)\\b/i],\n  ['support', /\\b(bug|error|broken|issue|problem|not working|help)\\b/i],\n  ['partnership', /\\b(partner|partnership|collaborat|integration|resell|affiliate)\\b/i],\n];\n\nconst out = [];\nfor (const item of $input.all()) {\n  // Webhook node puts the POST body under `body`; also accept a flat object.\n  const src = item.json.body ?? item.json;\n  const name = String(src.name ?? '').trim();\n  const email = String(src.email ?? '').trim().toLowerCase();\n  const message = String(src.message ?? '').trim();\n  const company = String(src.company ?? '').trim();\n\n  if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {\n    throw new Error(`Invalid or missing \"email\" in payload: ${JSON.stringify(src)}`);\n  }\n  if (!message) {\n    throw new Error('Missing \"message\" in payload');\n  }\n\n  const intent = (RULES.find(([, re]) => re.test(message)) ?? ['general'])[0];\n  const firstName = name.split(/\\s+/)[0] || 'there';\n  const lead = { name, firstName, email, message, company, intent };\n\n  const draft = `Hi ${firstName},\\n\\n${TEMPLATES[intent](lead)}\\n\\n${cfg.signature}`;\n  const subject = `Re: ${cfg.subjectPrefix}${company ? ' (' + company + ')' : ''}`;\n\n  out.push({ json: { ...lead, subject, draft, receivedAt: new Date().toISOString() } });\n}\nreturn out;\n"
+      },
+      "id": "0f2b8d32-2126-5536-a5ca-b511324f0202",
+      "name": "Build Draft (template)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-4o-mini',\n  temperature: 0.4,\n  messages: [\n    { role: 'system', content: 'You write short, friendly, specific first replies to inbound leads. Under 120 words. No promises about price or dates. Ask one clear next-step question. Plain text only. End with this signature exactly:\\n' + $('Config').item.json.signature },\n    { role: 'user', content: 'Lead name: ' + $json.name + '\\nCompany: ' + ($json.company || 'n/a') + '\\nMessage:\\n' + $json.message + '\\n\\nTemplate draft to improve:\\n' + $json.draft }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "a9948b1c-fea9-5fb6-a46b-5527a9e724ff",
+      "name": "Optional: AI Draft (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ],
+      "disabled": true,
+      "notes": "Disabled by default so the workflow runs with zero AI credentials. To use: create a Header Auth credential (Name: Authorization, Value: Bearer sk-...), select it here, then enable the node."
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5c9427ae-bb01-5ab2-83ff-3f048c015c58",
+              "name": "name",
+              "value": "={{ $('Build Draft (template)').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "c980656a-8d37-52a7-837f-6f8d8756f583",
+              "name": "email",
+              "value": "={{ $('Build Draft (template)').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "ff71917f-d804-5fd4-8656-abd4d45b3ee0",
+              "name": "company",
+              "value": "={{ $('Build Draft (template)').item.json.company }}",
+              "type": "string"
+            },
+            {
+              "id": "d5639590-6c2d-5192-9ef7-8cdef099373c",
+              "name": "message",
+              "value": "={{ $('Build Draft (template)').item.json.message }}",
+              "type": "string"
+            },
+            {
+              "id": "94d26a10-6195-55aa-bb4a-af5ac7e0035b",
+              "name": "intent",
+              "value": "={{ $('Build Draft (template)').item.json.intent }}",
+              "type": "string"
+            },
+            {
+              "id": "08022629-7ec3-567f-8b0c-1477fe59aa4b",
+              "name": "subject",
+              "value": "={{ $('Build Draft (template)').item.json.subject }}",
+              "type": "string"
+            },
+            {
+              "id": "3d08ec09-6e91-5479-b1bc-c06765fd6f8a",
+              "name": "receivedAt",
+              "value": "={{ $('Build Draft (template)').item.json.receivedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "d2ca1077-5dd7-5704-bec1-a1f11683018d",
+              "name": "draft",
+              "value": "={{ $json.choices?.[0]?.message?.content?.trim() || $('Build Draft (template)').item.json.draft }}",
+              "type": "string"
+            },
+            {
+              "id": "59dde601-323a-5786-b8c5-043591bfc872",
+              "name": "draftSource",
+              "value": "={{ $json.choices ? 'ai' : 'template' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c9c91b56-580a-5d0a-85d1-7a1cfa4e4542",
+      "name": "Pick Draft",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').item.json.slackWebhookUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  text: 'New lead from ' + $json.name + ' <' + $json.email + '> needs a reply',\n  blocks: [\n    { type: 'header', text: { type: 'plain_text', text: 'New lead: ' + ($json.name || $json.email) } },\n    { type: 'section', fields: [\n      { type: 'mrkdwn', text: '*Email:*\\n' + $json.email },\n      { type: 'mrkdwn', text: '*Company:*\\n' + ($json.company || '-') },\n      { type: 'mrkdwn', text: '*Intent:*\\n' + $json.intent },\n      { type: 'mrkdwn', text: '*Draft source:*\\n' + $json.draftSource }\n    ] },\n    { type: 'section', text: { type: 'mrkdwn', text: '*Their message:*\\n>' + $json.message.split('\\n').join('\\n>') } },\n    { type: 'section', text: { type: 'mrkdwn', text: '*Draft reply:*\\n```' + $json.draft + '```' } },\n    { type: 'actions', elements: [\n      { type: 'button', style: 'primary', text: { type: 'plain_text', text: 'Review: approve, edit or reject' }, url: $execution.resumeFormUrl }\n    ] },\n    { type: 'context', elements: [ { type: 'mrkdwn', text: 'Nothing is sent until someone approves. Link expires in 48h.' } ] }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "d662d126-58f1-5099-875e-35da9344111f",
+      "name": "Post Draft to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        300
+      ],
+      "notes": "Uses a Slack Incoming Webhook URL (set in Config), so no Slack app credential is needed."
+    },
+    {
+      "parameters": {
+        "resume": "form",
+        "limitWaitTime": true,
+        "limitType": "afterTimeInterval",
+        "resumeAmount": 48,
+        "resumeUnit": "hours",
+        "formTitle": "Approve reply",
+        "formDescription": "={{ 'To: ' + $('Pick Draft').item.json.name + ' <' + $('Pick Draft').item.json.email + '>\\nSubject: ' + $('Pick Draft').item.json.subject + '\\n\\nTheir message:\\n' + $('Pick Draft').item.json.message }}",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Decision",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Approve & send"
+                  },
+                  {
+                    "option": "Reject"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Reply",
+              "fieldType": "textarea",
+              "defaultValue": "={{ $('Pick Draft').item.json.draft }}",
+              "placeholder": "Leave empty to send the draft as-is"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3626bd48-182f-5b56-9ae7-2bf82c9546d5",
+      "name": "Wait for Approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        300
+      ],
+      "webhookId": "efc60021-c4c1-5f64-bf40-34abc3272965"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9ddaebce-149e-5448-a163-f22d32f020d1",
+              "leftValue": "={{ $json.Decision }}",
+              "rightValue": "Approve & send",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "20c40e17-86b1-520e-a4d7-2b7ac471a9af",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6f139933-fdc7-5a97-b769-4b9e7c73e8cf",
+              "name": "finalReply",
+              "value": "={{ ($('Wait for Approval').item.json.Reply || '').trim() || $('Pick Draft').item.json.draft }}",
+              "type": "string"
+            },
+            {
+              "id": "3caeee29-dc9f-5ead-abd4-4482666d692d",
+              "name": "edited",
+              "value": "={{ (($('Wait for Approval').item.json.Reply || '').trim() || $('Pick Draft').item.json.draft) !== $('Pick Draft').item.json.draft }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ac97cf5f-ef79-52ad-a79d-215a9522eea7",
+      "name": "Final Reply",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Pick Draft').item.json.email }}",
+        "subject": "={{ $('Pick Draft').item.json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.finalReply }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "07c1caae-e0f1-5ec2-b17b-637c6ccb112b",
+      "name": "Send Reply (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1980,
+        200
+      ],
+      "webhookId": "a72eb0b1-ab68-52a9-880a-88182ed9510a",
+      "notes": "Select your Gmail OAuth2 credential. Prefer SMTP? Swap for the 'Send Email' node and map the same three fields."
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "76099e3f-5147-59d8-bf72-3299e1a05df9",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "2332a926-ac22-571d-b049-dac4c65a4345",
+              "name": "receivedAt",
+              "value": "={{ $('Pick Draft').item.json.receivedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "f9c8df07-c090-58a6-a955-844cd103a5a8",
+              "name": "name",
+              "value": "={{ $('Pick Draft').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "c1cfd64b-0217-5d74-aed2-b7c67c36d997",
+              "name": "email",
+              "value": "={{ $('Pick Draft').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "a54ac8ba-c219-5d3b-8450-cfa1e61b1131",
+              "name": "company",
+              "value": "={{ $('Pick Draft').item.json.company }}",
+              "type": "string"
+            },
+            {
+              "id": "44fac284-2b9e-53a3-834f-1205e96b5069",
+              "name": "intent",
+              "value": "={{ $('Pick Draft').item.json.intent }}",
+              "type": "string"
+            },
+            {
+              "id": "a05e0420-97b0-5401-aba0-d9b81be148ba",
+              "name": "status",
+              "value": "={{ $('Final Reply').item.json.edited ? 'sent_edited' : 'sent' }}",
+              "type": "string"
+            },
+            {
+              "id": "8fb08a8b-62e9-57a3-a452-2521c81d6ed0",
+              "name": "draftSource",
+              "value": "={{ $('Pick Draft').item.json.draftSource }}",
+              "type": "string"
+            },
+            {
+              "id": "a5d9bdcb-4c41-525e-9120-65a6cc727a43",
+              "name": "reply",
+              "value": "={{ $('Final Reply').item.json.finalReply }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ed65636b-ca81-5c5c-825c-aa59be03e9aa",
+      "name": "Log: Sent",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "76099e3f-5147-59d8-bf72-3299e1a05df9",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "2332a926-ac22-571d-b049-dac4c65a4345",
+              "name": "receivedAt",
+              "value": "={{ $('Pick Draft').item.json.receivedAt }}",
+              "type": "string"
+            },
+            {
+              "id": "f9c8df07-c090-58a6-a955-844cd103a5a8",
+              "name": "name",
+              "value": "={{ $('Pick Draft').item.json.name }}",
+              "type": "string"
+            },
+            {
+              "id": "c1cfd64b-0217-5d74-aed2-b7c67c36d997",
+              "name": "email",
+              "value": "={{ $('Pick Draft').item.json.email }}",
+              "type": "string"
+            },
+            {
+              "id": "a54ac8ba-c219-5d3b-8450-cfa1e61b1131",
+              "name": "company",
+              "value": "={{ $('Pick Draft').item.json.company }}",
+              "type": "string"
+            },
+            {
+              "id": "44fac284-2b9e-53a3-834f-1205e96b5069",
+              "name": "intent",
+              "value": "={{ $('Pick Draft').item.json.intent }}",
+              "type": "string"
+            },
+            {
+              "id": "f481bfd2-424d-58ea-9f4c-ae70fd217da0",
+              "name": "status",
+              "value": "={{ $('Wait for Approval').item.json.Decision === 'Reject' ? 'rejected' : 'expired' }}",
+              "type": "string"
+            },
+            {
+              "id": "8fb08a8b-62e9-57a3-a452-2521c81d6ed0",
+              "name": "draftSource",
+              "value": "={{ $('Pick Draft').item.json.draftSource }}",
+              "type": "string"
+            },
+            {
+              "id": "7a8650d7-d247-58d2-a022-842bbf811e39",
+              "name": "reply",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c1de21d1-67c9-5f99-817e-5d8072f739b3",
+      "name": "Log: Rejected / Expired",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1760,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "71089096-9097-5523-a3ce-4fe16c897834",
+      "name": "Append to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2420,
+        300
+      ],
+      "notes": "Sheet tab 'Log' with header row: timestamp, receivedAt, name, email, company, intent, status, draftSource, reply"
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Build Draft (template)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Draft (template)": {
+      "main": [
+        [
+          {
+            "node": "Optional: AI Draft (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Optional: AI Draft (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Pick Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Draft": {
+      "main": [
+        [
+          {
+            "node": "Post Draft to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Draft to Slack": {
+      "main": [
+        [
+          {
+            "node": "Wait for Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Approval": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "Final Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log: Rejected / Expired",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Reply": {
+      "main": [
+        [
+          {
+            "node": "Send Reply (Gmail)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply (Gmail)": {
+      "main": [
+        [
+          {
+            "node": "Log: Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log: Sent": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log: Rejected / Expired": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
