@@ -2,6 +2,8 @@
 
 An n8n workflow that drafts a first reply to every inbound lead, posts it to Slack, and **waits for a person to approve, edit, or reject it** before anything is emailed. Every outcome is logged to Google Sheets.
 
+Also available in the official n8n template library: [Approve lead reply emails in Slack with Gmail and Google Sheets](https://n8n.io/workflows/22837-approve-lead-reply-emails-in-slack-with-gmail-and-google-sheets/).
+
 No AI key is required. Drafts come from editable templates in a Code node. An optional OpenAI step is included but disabled.
 
 ```
